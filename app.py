@@ -7,6 +7,7 @@ import tempfile
 import streamlit as st
 from dotenv import load_dotenv
 from fpdf import FPDF
+from fpdf.enums import XPos, YPos
 from google.api_core import exceptions as google_exceptions
 from google.genai import errors as genai_errors
 
@@ -211,7 +212,7 @@ if "transcript" in st.session_state and st.session_state["transcript"]:
 
         # Title
         pdf.set_font("Helvetica", "B", 16)
-        pdf.cell(0, 10, "PharmaTranscribe AI - Transcript", ln=True, align="C")
+        pdf.cell(0, 10, "PharmaTranscribe AI - Transcript", new_x=XPos.LMARGIN, new_y=YPos.NEXT, align="C")
         pdf.ln(10)
 
         # Content
