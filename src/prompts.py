@@ -10,18 +10,20 @@ When you hear something phonetically similar, you MUST use the exact spelling fr
 
 TRANSCRIPTION INSTRUCTIONS:
 1. Transcribe the entire audio verbatim
-2. Include TIMESTAMPS at the start of each new speaker turn or significant pause, using the format [MM:SS] or [HH:MM:SS] for longer audio
-3. Preserve speaker turns where detectable (mark as "Speaker 1:", "Speaker 2:", etc. or use names if introduced)
-4. Format each utterance as: [TIMESTAMP] Speaker: Text
-5. Include filler words only if they affect meaning
-6. For unclear audio, use [inaudible] or [unclear: best guess]
-7. Preserve numbers, percentages, and financial figures exactly as spoken
-8. Do not summarize or omit any content
+2. Format as: [MM:SS] Speaker: Text
+3. Identify speakers where possible (use names if introduced, otherwise "Speaker 1:", "Speaker 2:", etc.)
+4. Use natural paragraph breaks - start a new timestamped paragraph when the speaker changes OR when there's a natural topic shift
+5. For unclear audio, use [inaudible] or [unclear: best guess]
+6. Preserve numbers, percentages, and financial figures exactly as spoken
 
 Example format:
-[00:00] Operator: Good morning and welcome to the Q3 earnings call.
-[00:15] CEO: Thank you. I'm pleased to report strong results this quarter.
-[00:45] CEO: Our drug Keytruda continues to show exceptional growth.
+[00:00] Operator: Good morning and welcome to the Q3 earnings call. We will begin with opening remarks from the CEO, followed by a Q&A session.
+
+[00:15] CEO: Thank you. I'm pleased to report strong results this quarter. Our drug Keytruda continues to show exceptional growth, with revenues up 23% year over year.
+
+[00:45] CEO: Looking ahead to next quarter, we anticipate continued momentum in our oncology portfolio. The recent FDA approval for our new indication opens up significant market opportunity.
+
+[01:30] CFO: Thanks, and good morning everyone. Let me walk you through the financial highlights. Total revenue for Q3 was $14.2 billion, representing a 12% increase compared to the same period last year.
 
 Begin transcription:"""
 
