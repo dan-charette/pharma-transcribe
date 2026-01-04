@@ -11,7 +11,7 @@ from fpdf.enums import XPos, YPos
 from google.api_core import exceptions as google_exceptions
 from google.genai import errors as genai_errors
 
-from src.audio_recorder import AudioConversionError, save_recording_as_mp3
+from src.audio_recorder import AudioConversionError, convert_wav_to_mp3, save_recording_as_mp3
 from src.gemini_client import (
     FileProcessingError,
     delete_file,
@@ -85,6 +85,18 @@ with tab_record:
         st.audio(audio_recording)
         recording_size = len(audio_recording.getvalue()) / 1024
         st.success(f"Recording captured ({recording_size:.1f} KB)")
+
+        # Convert to MP3 and offer download
+        try:
+            mp3_data = convert_wav_to_mp3(audio_recording.getvalue())
+            st.download_button(
+                label="Download Recording as MP3",
+                data=mp3_data,
+                file_name="recording.mp3",
+                mime="audio/mpeg",
+            )
+        except AudioConversionError as e:
+            st.warning(f"Could not prepare MP3 download: {e}")
 
 # Determine which audio source to use
 audio_source = None
