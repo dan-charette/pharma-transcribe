@@ -7,9 +7,12 @@ import tempfile
 import streamlit as st
 from dotenv import load_dotenv
 from fpdf import FPDF
+from fpdf.enums import XPos, YPos
 from google.api_core import exceptions as google_exceptions
 from google.genai import errors as genai_errors
 
+from src.audio_recorder import AudioConversionError, convert_wav_to_mp3, save_recording_as_mp3
+from src.components.audio_recorder import audio_recorder
 from src.gemini_client import (
     FileProcessingError,
     delete_file,
@@ -59,13 +62,49 @@ if not api_key:
 st.session_state["api_key"] = api_key
 
 # --- Input Section ---
-st.header("Upload Audio")
+st.header("Audio Input")
 
-uploaded_file = st.file_uploader(
-    "Upload Earnings Call Audio",
-    type=["mp3", "wav", "m4a", "mpeg"],
-    help="Supported formats: MP3, WAV, M4A, MPEG (up to 200MB)",
-)
+# Create tabs for input methods
+tab_upload, tab_record = st.tabs(["Upload File", "Record Audio"])
+
+with tab_upload:
+    uploaded_file = st.file_uploader(
+        "Upload Earnings Call Audio",
+        type=["mp3", "wav", "m4a", "mpeg"],
+        help="Supported formats: MP3, WAV, M4A, MPEG (up to 200MB)",
+    )
+
+with tab_record:
+    st.markdown("Record audio directly from your microphone.")
+    st.caption("Speaker audio capture enabled (echo cancellation disabled)")
+
+    audio_recording = audio_recorder(key="audio_recorder")
+
+    if audio_recording:
+        recording_size = len(audio_recording.getvalue()) / 1024
+
+        # Convert to MP3 and offer download
+        try:
+            mp3_data = convert_wav_to_mp3(audio_recording.getvalue())
+            st.download_button(
+                label="Download Recording as MP3",
+                data=mp3_data,
+                file_name="recording.mp3",
+                mime="audio/mpeg",
+            )
+        except AudioConversionError as e:
+            st.warning(f"Could not prepare MP3 download: {e}")
+
+# Determine which audio source to use
+audio_source = None
+audio_source_type = None
+
+if uploaded_file:
+    audio_source = uploaded_file
+    audio_source_type = "upload"
+elif audio_recording:
+    audio_source = audio_recording
+    audio_source_type = "recording"
 
 st.header("Context Keywords")
 
@@ -76,9 +115,9 @@ keywords = st.text_area(
 )
 
 # --- Transcription ---
-if st.button("Transcribe", type="primary", disabled=not uploaded_file):
-    if not uploaded_file:
-        st.error("Please upload an audio file first.")
+if st.button("Transcribe", type="primary", disabled=audio_source is None):
+    if audio_source is None:
+        st.error("Please upload an audio file or record audio first.")
         st.stop()
 
     # Initialize variables for cleanup
@@ -88,13 +127,21 @@ if st.button("Transcribe", type="primary", disabled=not uploaded_file):
 
     try:
         with st.status("Processing...", expanded=True) as status:
-            # Write uploaded file to temp file
-            status.update(label="Preparing audio file...")
-            with tempfile.NamedTemporaryFile(
-                delete=False, suffix=os.path.splitext(uploaded_file.name)[1]
-            ) as tmp:
-                tmp.write(uploaded_file.getbuffer())
-                temp_file_path = tmp.name
+            # Prepare audio file based on source type
+            if audio_source_type == "upload":
+                status.update(label="Preparing uploaded file...")
+                with tempfile.NamedTemporaryFile(
+                    delete=False, suffix=os.path.splitext(uploaded_file.name)[1]
+                ) as tmp:
+                    tmp.write(uploaded_file.getbuffer())
+                    temp_file_path = tmp.name
+            elif audio_source_type == "recording":
+                status.update(label="Converting recording to MP3...")
+                try:
+                    temp_file_path = save_recording_as_mp3(audio_source.getvalue())
+                except AudioConversionError as e:
+                    st.error(f"Failed to process recording: {e}")
+                    st.stop()
 
             # Get MIME type and initialize client
             mime_type = get_mime_type(temp_file_path)
@@ -174,7 +221,7 @@ if "transcript" in st.session_state and st.session_state["transcript"]:
 
         # Title
         pdf.set_font("Helvetica", "B", 16)
-        pdf.cell(0, 10, "PharmaTranscribe AI - Transcript", ln=True, align="C")
+        pdf.cell(0, 10, "PharmaTranscribe AI - Transcript", new_x=XPos.LMARGIN, new_y=YPos.NEXT, align="C")
         pdf.ln(10)
 
         # Content

@@ -1,0 +1,426 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Audio Recorder</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        }
+
+        body {
+            margin: 0;
+            padding: 10px;
+            background: transparent;
+        }
+
+        .recorder-container {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+
+        .controls {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .record-btn {
+            width: 48px;
+            height: 48px;
+            border-radius: 50%;
+            border: none;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.2s ease;
+        }
+
+        .record-btn.idle {
+            background: #ff4b4b;
+        }
+
+        .record-btn.idle:hover {
+            background: #ff3333;
+        }
+
+        .record-btn.recording {
+            background: #ff4b4b;
+            animation: pulse 1.5s infinite;
+        }
+
+        .record-btn.has-recording {
+            background: #4b9fff;
+        }
+
+        .record-btn.has-recording:hover {
+            background: #3388ff;
+        }
+
+        @keyframes pulse {
+            0%, 100% { transform: scale(1); opacity: 1; }
+            50% { transform: scale(1.05); opacity: 0.8; }
+        }
+
+        .record-icon {
+            width: 20px;
+            height: 20px;
+            background: white;
+            border-radius: 50%;
+        }
+
+        .stop-icon {
+            width: 16px;
+            height: 16px;
+            background: white;
+            border-radius: 3px;
+        }
+
+        .mic-icon {
+            width: 24px;
+            height: 24px;
+            fill: white;
+        }
+
+        .status {
+            font-size: 14px;
+            color: #666;
+        }
+
+        .status.recording {
+            color: #ff4b4b;
+            font-weight: 500;
+        }
+
+        .status.success {
+            color: #28a745;
+        }
+
+        .timer {
+            font-family: monospace;
+            font-size: 14px;
+            color: #333;
+            min-width: 60px;
+        }
+
+        .audio-preview {
+            width: 100%;
+            height: 40px;
+        }
+
+        .info-text {
+            font-size: 12px;
+            color: #888;
+            margin-top: 4px;
+        }
+
+        .error {
+            color: #dc3545;
+            font-size: 14px;
+        }
+    </style>
+</head>
+<body>
+    <div class="recorder-container">
+        <div class="controls">
+            <button id="recordBtn" class="record-btn idle" title="Click to start recording">
+                <div class="record-icon"></div>
+            </button>
+            <span id="status" class="status">Click to start recording</span>
+            <span id="timer" class="timer"></span>
+        </div>
+        <div id="audioContainer" style="display: none;">
+            <audio id="audioPreview" class="audio-preview" controls></audio>
+        </div>
+        <div id="error" class="error" style="display: none;"></div>
+        <div class="info-text">
+            Speaker audio capture enabled (echo cancellation disabled)
+        </div>
+    </div>
+
+    <script>
+        // Streamlit component communication
+        function sendBackMsg(type, data) {
+            window.parent.postMessage({
+                isStreamlitMessage: true,
+                type: type,
+                ...data
+            }, "*");
+        }
+
+        function setComponentValue(value) {
+            // For string data, use "json" dataType
+            sendBackMsg("streamlit:setComponentValue", {
+                value: value,
+                dataType: "json"
+            });
+        }
+
+        function setFrameHeight(height) {
+            sendBackMsg("streamlit:setFrameHeight", { height: height });
+        }
+
+        function setComponentReady() {
+            sendBackMsg("streamlit:componentReady", { apiVersion: 1 });
+        }
+
+        // Audio recording state
+        let mediaRecorder = null;
+        let audioChunks = [];
+        let audioStream = null;
+        let audioContext = null;
+        let isRecording = false;
+        let startTime = null;
+        let timerInterval = null;
+
+        // DOM elements
+        const recordBtn = document.getElementById('recordBtn');
+        const status = document.getElementById('status');
+        const timer = document.getElementById('timer');
+        const audioContainer = document.getElementById('audioContainer');
+        const audioPreview = document.getElementById('audioPreview');
+        const errorDiv = document.getElementById('error');
+
+        // Format time as MM:SS
+        function formatTime(seconds) {
+            const mins = Math.floor(seconds / 60);
+            const secs = Math.floor(seconds % 60);
+            return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+        }
+
+        // Update timer display
+        function updateTimer() {
+            if (startTime) {
+                const elapsed = (Date.now() - startTime) / 1000;
+                timer.textContent = formatTime(elapsed);
+            }
+        }
+
+        // Convert AudioBuffer to WAV format
+        function audioBufferToWav(buffer) {
+            const numChannels = 1; // Mono
+            const sampleRate = buffer.sampleRate;
+            const format = 1; // PCM
+            const bitDepth = 16;
+
+            // Get audio data (mono - use first channel or mix down)
+            let audioData;
+            if (buffer.numberOfChannels === 1) {
+                audioData = buffer.getChannelData(0);
+            } else {
+                // Mix down to mono
+                const left = buffer.getChannelData(0);
+                const right = buffer.getChannelData(1);
+                audioData = new Float32Array(left.length);
+                for (let i = 0; i < left.length; i++) {
+                    audioData[i] = (left[i] + right[i]) / 2;
+                }
+            }
+
+            const dataLength = audioData.length * (bitDepth / 8);
+            const bufferLength = 44 + dataLength;
+            const arrayBuffer = new ArrayBuffer(bufferLength);
+            const view = new DataView(arrayBuffer);
+
+            // WAV header
+            const writeString = (offset, string) => {
+                for (let i = 0; i < string.length; i++) {
+                    view.setUint8(offset + i, string.charCodeAt(i));
+                }
+            };
+
+            writeString(0, 'RIFF');
+            view.setUint32(4, bufferLength - 8, true);
+            writeString(8, 'WAVE');
+            writeString(12, 'fmt ');
+            view.setUint32(16, 16, true); // Subchunk1Size
+            view.setUint16(20, format, true);
+            view.setUint16(22, numChannels, true);
+            view.setUint32(24, sampleRate, true);
+            view.setUint32(28, sampleRate * numChannels * (bitDepth / 8), true);
+            view.setUint16(32, numChannels * (bitDepth / 8), true);
+            view.setUint16(34, bitDepth, true);
+            writeString(36, 'data');
+            view.setUint32(40, dataLength, true);
+
+            // Write audio data
+            const offset = 44;
+            for (let i = 0; i < audioData.length; i++) {
+                const sample = Math.max(-1, Math.min(1, audioData[i]));
+                const intSample = sample < 0 ? sample * 0x8000 : sample * 0x7FFF;
+                view.setInt16(offset + i * 2, intSample, true);
+            }
+
+            return arrayBuffer;
+        }
+
+        // Convert blob to WAV and send to Streamlit
+        async function processRecording(blob) {
+            try {
+                status.textContent = 'Processing...';
+
+                // Create audio context for decoding
+                audioContext = new (window.AudioContext || window.webkitAudioContext)();
+
+                // Read blob as array buffer
+                const arrayBuffer = await blob.arrayBuffer();
+
+                // Decode audio data
+                const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+
+                // Convert to WAV
+                const wavBuffer = audioBufferToWav(audioBuffer);
+
+                // Convert to base64
+                const wavBytes = new Uint8Array(wavBuffer);
+                let binary = '';
+                for (let i = 0; i < wavBytes.byteLength; i++) {
+                    binary += String.fromCharCode(wavBytes[i]);
+                }
+                const base64 = btoa(binary);
+
+                // Send to Streamlit
+                setComponentValue(base64);
+
+                // Update UI
+                status.className = 'status success';
+                status.textContent = `Recording captured (${(wavBytes.length / 1024).toFixed(1)} KB)`;
+
+                // Show audio preview
+                const wavBlob = new Blob([wavBuffer], { type: 'audio/wav' });
+                audioPreview.src = URL.createObjectURL(wavBlob);
+                audioContainer.style.display = 'block';
+
+            } catch (err) {
+                console.error('Error processing recording:', err);
+                errorDiv.textContent = 'Error processing recording: ' + err.message;
+                errorDiv.style.display = 'block';
+            }
+        }
+
+        // Start recording
+        async function startRecording() {
+            try {
+                errorDiv.style.display = 'none';
+
+                // Request microphone with echo cancellation DISABLED
+                const constraints = {
+                    audio: {
+                        echoCancellation: false,
+                        autoGainControl: false,
+                        noiseSuppression: false,
+                        channelCount: 1
+                    }
+                };
+
+                audioStream = await navigator.mediaDevices.getUserMedia(constraints);
+
+                // Log actual constraints applied
+                const track = audioStream.getAudioTracks()[0];
+                const settings = track.getSettings();
+                console.log('Audio settings:', settings);
+                console.log('Echo cancellation:', settings.echoCancellation);
+
+                // Create MediaRecorder
+                const options = { mimeType: 'audio/webm;codecs=opus' };
+                if (!MediaRecorder.isTypeSupported(options.mimeType)) {
+                    // Fallback for Safari
+                    options.mimeType = 'audio/mp4';
+                    if (!MediaRecorder.isTypeSupported(options.mimeType)) {
+                        options.mimeType = '';
+                    }
+                }
+
+                mediaRecorder = new MediaRecorder(audioStream, options);
+                audioChunks = [];
+
+                mediaRecorder.ondataavailable = (event) => {
+                    if (event.data.size > 0) {
+                        audioChunks.push(event.data);
+                    }
+                };
+
+                mediaRecorder.onstop = () => {
+                    const blob = new Blob(audioChunks, { type: mediaRecorder.mimeType });
+                    processRecording(blob);
+                };
+
+                mediaRecorder.start(100); // Collect data every 100ms
+                isRecording = true;
+                startTime = Date.now();
+
+                // Update UI
+                recordBtn.className = 'record-btn recording';
+                recordBtn.innerHTML = '<div class="stop-icon"></div>';
+                recordBtn.title = 'Click to stop recording';
+                status.className = 'status recording';
+                status.textContent = 'Recording...';
+
+                // Start timer
+                timerInterval = setInterval(updateTimer, 100);
+                updateTimer();
+
+            } catch (err) {
+                console.error('Error starting recording:', err);
+                errorDiv.textContent = 'Error accessing microphone: ' + err.message;
+                errorDiv.style.display = 'block';
+            }
+        }
+
+        // Stop recording
+        function stopRecording() {
+            if (mediaRecorder && isRecording) {
+                mediaRecorder.stop();
+                isRecording = false;
+
+                // Stop all tracks
+                if (audioStream) {
+                    audioStream.getTracks().forEach(track => track.stop());
+                }
+
+                // Stop timer
+                if (timerInterval) {
+                    clearInterval(timerInterval);
+                    timerInterval = null;
+                }
+
+                // Update UI
+                recordBtn.className = 'record-btn has-recording';
+                recordBtn.innerHTML = '<div class="record-icon"></div>';
+                recordBtn.title = 'Click to record again';
+            }
+        }
+
+        // Toggle recording
+        recordBtn.addEventListener('click', () => {
+            if (isRecording) {
+                stopRecording();
+            } else {
+                startRecording();
+            }
+        });
+
+        // Initialize component
+        function init() {
+            setFrameHeight(150);
+            setComponentReady();
+        }
+
+        // Handle messages from Streamlit
+        function onMessage(event) {
+            if (!event.data || event.data.type !== "streamlit:render") {
+                return;
+            }
+            // Component is being rendered/re-rendered
+            // Access args via event.data.args if needed
+            setFrameHeight(150);
+        }
+
+        window.addEventListener("message", onMessage);
+        init();
+    </script>
+</body>
+</html>
