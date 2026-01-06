@@ -12,6 +12,7 @@ from google.api_core import exceptions as google_exceptions
 from google.genai import errors as genai_errors
 
 from src.audio_recorder import AudioConversionError, convert_wav_to_mp3, save_recording_as_mp3
+from src.components.audio_recorder import audio_recorder
 from src.gemini_client import (
     FileProcessingError,
     delete_file,
@@ -75,16 +76,12 @@ with tab_upload:
 
 with tab_record:
     st.markdown("Record audio directly from your microphone.")
+    st.caption("Speaker audio capture enabled (echo cancellation disabled)")
 
-    audio_recording = st.audio_input(
-        "Click to start recording",
-        help="Click the microphone icon to start/stop recording",
-    )
+    audio_recording = audio_recorder(key="audio_recorder")
 
     if audio_recording:
-        st.audio(audio_recording)
         recording_size = len(audio_recording.getvalue()) / 1024
-        st.success(f"Recording captured ({recording_size:.1f} KB)")
 
         # Convert to MP3 and offer download
         try:
