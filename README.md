@@ -9,10 +9,10 @@ Standard speech-to-text models frequently misinterpret pharmaceutical terminolog
 ## Features
 
 - Upload audio files up to 200MB (MP3, WAV, M4A, MPEG)
-- Record audio directly from your microphone
+- Record audio directly from your microphone with **speaker audio capture** (captures audio playing through your speakers, perfect for transcribing earnings calls from another browser tab)
 - Inject domain-specific keywords for improved accuracy
 - Real-time streaming transcription display
-- Download transcripts as text files
+- Download transcripts as text or PDF files
 
 ## Setup
 
@@ -73,10 +73,10 @@ The app will open in your browser at http://localhost:8501
 
 1. Choose input method:
    - **Upload File**: Select an existing audio file (MP3, WAV, M4A, or MPEG up to 200MB)
-   - **Record Audio**: Click the microphone to start recording, click again to stop
+   - **Record Audio**: Click the record button to capture audio. This mode has echo cancellation disabled, so it will capture audio playing through your computer's speakers (e.g., an earnings call playing in another browser tab)
 2. Enter domain keywords (drug names, tickers, technical terms) separated by commas
 3. Click **Transcribe**
-4. Download the completed transcript
+4. Download the completed transcript as TXT or PDF
 
 ## Testing
 
@@ -93,7 +93,9 @@ pharma-transcribe/
 │   ├── audio_recorder.py  # Audio recording/conversion
 │   ├── gemini_client.py   # Gemini API wrapper
 │   ├── prompts.py         # Prompt templates
-│   └── utils.py           # File handling utilities
+│   ├── utils.py           # File handling utilities
+│   └── components/        # Custom Streamlit components
+│       └── audio_recorder/  # Speaker audio capture component
 ├── tests/
 │   ├── conftest.py        # Pytest fixtures
 │   ├── test_audio_recorder.py  # Audio recording tests
