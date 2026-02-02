@@ -40,7 +40,7 @@ def upload_audio(client: genai.Client, file_path: str, mime_type: str) -> types.
 def wait_for_active(
     client: genai.Client,
     file: types.File,
-    timeout_seconds: int = 300,
+    timeout_seconds: int = 900,
     poll_interval: int = 3,
 ) -> types.File:
     """Wait for file to be ready for use.
@@ -51,7 +51,7 @@ def wait_for_active(
     Args:
         client: Gemini client instance
         file: File object returned from upload_audio
-        timeout_seconds: Maximum time to wait (default: 300)
+        timeout_seconds: Maximum time to wait (default: 900)
         poll_interval: Seconds between status checks (default: 3)
 
     Returns:

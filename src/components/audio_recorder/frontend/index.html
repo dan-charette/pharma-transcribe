@@ -121,6 +121,20 @@
             color: #dc3545;
             font-size: 14px;
         }
+
+        .duration-warning {
+            background: #fff3cd;
+            border: 1px solid #ffc107;
+            border-radius: 4px;
+            padding: 8px 12px;
+            font-size: 13px;
+            color: #856404;
+            display: none;
+        }
+
+        .duration-warning.visible {
+            display: block;
+        }
     </style>
 </head>
 <body>
@@ -136,6 +150,9 @@
             <audio id="audioPreview" class="audio-preview" controls></audio>
         </div>
         <div id="error" class="error" style="display: none;"></div>
+        <div id="durationWarning" class="duration-warning">
+            ⚠️ Recording is over 30 minutes. Consider stopping and processing in segments for best results.
+        </div>
         <div class="info-text">
             Speaker audio capture enabled (echo cancellation disabled)
         </div>
@@ -183,6 +200,10 @@
         const audioContainer = document.getElementById('audioContainer');
         const audioPreview = document.getElementById('audioPreview');
         const errorDiv = document.getElementById('error');
+        const durationWarning = document.getElementById('durationWarning');
+
+        // Warning threshold: 30 minutes in seconds
+        const DURATION_WARNING_THRESHOLD = 30 * 60;
 
         // Format time as MM:SS
         function formatTime(seconds) {
@@ -196,102 +217,53 @@
             if (startTime) {
                 const elapsed = (Date.now() - startTime) / 1000;
                 timer.textContent = formatTime(elapsed);
+
+                // Show warning if recording exceeds threshold
+                if (elapsed >= DURATION_WARNING_THRESHOLD) {
+                    durationWarning.classList.add('visible');
+                    setFrameHeight(180);
+                }
             }
         }
 
-        // Convert AudioBuffer to WAV format
-        function audioBufferToWav(buffer) {
-            const numChannels = 1; // Mono
-            const sampleRate = buffer.sampleRate;
-            const format = 1; // PCM
-            const bitDepth = 16;
-
-            // Get audio data (mono - use first channel or mix down)
-            let audioData;
-            if (buffer.numberOfChannels === 1) {
-                audioData = buffer.getChannelData(0);
-            } else {
-                // Mix down to mono
-                const left = buffer.getChannelData(0);
-                const right = buffer.getChannelData(1);
-                audioData = new Float32Array(left.length);
-                for (let i = 0; i < left.length; i++) {
-                    audioData[i] = (left[i] + right[i]) / 2;
-                }
-            }
-
-            const dataLength = audioData.length * (bitDepth / 8);
-            const bufferLength = 44 + dataLength;
-            const arrayBuffer = new ArrayBuffer(bufferLength);
-            const view = new DataView(arrayBuffer);
-
-            // WAV header
-            const writeString = (offset, string) => {
-                for (let i = 0; i < string.length; i++) {
-                    view.setUint8(offset + i, string.charCodeAt(i));
-                }
-            };
-
-            writeString(0, 'RIFF');
-            view.setUint32(4, bufferLength - 8, true);
-            writeString(8, 'WAVE');
-            writeString(12, 'fmt ');
-            view.setUint32(16, 16, true); // Subchunk1Size
-            view.setUint16(20, format, true);
-            view.setUint16(22, numChannels, true);
-            view.setUint32(24, sampleRate, true);
-            view.setUint32(28, sampleRate * numChannels * (bitDepth / 8), true);
-            view.setUint16(32, numChannels * (bitDepth / 8), true);
-            view.setUint16(34, bitDepth, true);
-            writeString(36, 'data');
-            view.setUint32(40, dataLength, true);
-
-            // Write audio data
-            const offset = 44;
-            for (let i = 0; i < audioData.length; i++) {
-                const sample = Math.max(-1, Math.min(1, audioData[i]));
-                const intSample = sample < 0 ? sample * 0x8000 : sample * 0x7FFF;
-                view.setInt16(offset + i * 2, intSample, true);
-            }
-
-            return arrayBuffer;
-        }
-
-        // Convert blob to WAV and send to Streamlit
+        // Process recording and send compressed audio directly to Streamlit
         async function processRecording(blob) {
             try {
                 status.textContent = 'Processing...';
 
-                // Create audio context for decoding
-                audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                // Get format from MediaRecorder
+                const mimeType = mediaRecorder.mimeType || blob.type;
+                let format = 'webm';
+                if (mimeType.includes('mp4') || mimeType.includes('m4a')) {
+                    format = 'mp4';
+                }
 
-                // Read blob as array buffer
+                // Read blob directly (NO DECODING - keep compressed!)
                 const arrayBuffer = await blob.arrayBuffer();
+                const bytes = new Uint8Array(arrayBuffer);
 
-                // Decode audio data
-                const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
-
-                // Convert to WAV
-                const wavBuffer = audioBufferToWav(audioBuffer);
-
-                // Convert to base64
-                const wavBytes = new Uint8Array(wavBuffer);
+                // Base64 encode in chunks to avoid stack overflow on large files
                 let binary = '';
-                for (let i = 0; i < wavBytes.byteLength; i++) {
-                    binary += String.fromCharCode(wavBytes[i]);
+                const chunkSize = 32768;
+                for (let i = 0; i < bytes.length; i += chunkSize) {
+                    binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunkSize));
                 }
                 const base64 = btoa(binary);
 
-                // Send to Streamlit
-                setComponentValue(base64);
+                // Send JSON with format metadata
+                setComponentValue(JSON.stringify({
+                    data: base64,
+                    format: format,
+                    mimeType: mimeType
+                }));
 
                 // Update UI
+                const sizeKB = (bytes.length / 1024).toFixed(1);
                 status.className = 'status success';
-                status.textContent = `Recording captured (${(wavBytes.length / 1024).toFixed(1)} KB)`;
+                status.textContent = `Recording captured (${sizeKB} KB)`;
 
-                // Show audio preview
-                const wavBlob = new Blob([wavBuffer], { type: 'audio/wav' });
-                audioPreview.src = URL.createObjectURL(wavBlob);
+                // Preview using original blob
+                audioPreview.src = URL.createObjectURL(blob);
                 audioContainer.style.display = 'block';
 
             } catch (err) {
@@ -305,6 +277,8 @@
         async function startRecording() {
             try {
                 errorDiv.style.display = 'none';
+                durationWarning.classList.remove('visible');
+                setFrameHeight(150);
 
                 // Request microphone with echo cancellation DISABLED
                 const constraints = {

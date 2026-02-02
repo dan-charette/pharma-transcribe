@@ -8,6 +8,7 @@ import pytest
 
 from src.audio_recorder import (
     AudioConversionError,
+    convert_audio_to_mp3,
     convert_wav_to_mp3,
     get_audio_duration_seconds,
     save_recording_as_mp3,
@@ -81,6 +82,35 @@ class TestSaveRecordingAsMp3:
         """Test that invalid WAV data raises error."""
         with pytest.raises(AudioConversionError):
             save_recording_as_mp3(b"invalid wav data")
+
+
+class TestConvertAudioToMp3:
+    """Tests for convert_audio_to_mp3 function."""
+
+    def test_converts_wav_to_mp3(self, sample_wav_bytes):
+        """Test that WAV converts to MP3 using generic function."""
+        result = convert_audio_to_mp3(sample_wav_bytes, input_format="wav")
+        assert result is not None
+        assert len(result) > 0
+        # MP3 files start with ID3 tag or sync word
+        assert result[:3] == b"ID3" or result[:2] == b"\xff\xfb"
+
+    def test_raises_error_on_invalid_input(self):
+        """Test that invalid input raises AudioConversionError."""
+        with pytest.raises(AudioConversionError):
+            convert_audio_to_mp3(b"not valid audio data", input_format="wav")
+
+    def test_raises_error_with_format_in_message(self):
+        """Test that error message includes the input format."""
+        with pytest.raises(AudioConversionError, match="webm"):
+            convert_audio_to_mp3(b"not valid audio data", input_format="webm")
+
+    def test_respects_bitrate_parameter(self, sample_wav_bytes):
+        """Test that different bitrates produce different sizes."""
+        low_bitrate = convert_audio_to_mp3(sample_wav_bytes, input_format="wav", bitrate="64k")
+        high_bitrate = convert_audio_to_mp3(sample_wav_bytes, input_format="wav", bitrate="320k")
+        # Higher bitrate should produce larger file
+        assert len(high_bitrate) > len(low_bitrate)
 
 
 class TestGetAudioDurationSeconds:

@@ -11,7 +11,7 @@ from fpdf.enums import XPos, YPos
 from google.api_core import exceptions as google_exceptions
 from google.genai import errors as genai_errors
 
-from src.audio_recorder import AudioConversionError, convert_wav_to_mp3, save_recording_as_mp3
+from src.audio_recorder import AudioConversionError, convert_audio_to_mp3, convert_wav_to_mp3, save_recording_as_mp3
 from src.components.audio_recorder import audio_recorder
 from src.gemini_client import (
     FileProcessingError,
@@ -70,8 +70,8 @@ tab_upload, tab_record = st.tabs(["Upload File", "Record Audio"])
 with tab_upload:
     uploaded_file = st.file_uploader(
         "Upload Earnings Call Audio",
-        type=["mp3", "wav", "m4a", "mpeg"],
-        help="Supported formats: MP3, WAV, M4A, MPEG (up to 200MB)",
+        type=["mp3", "wav", "m4a", "mpeg", "webm"],
+        help="Supported formats: MP3, WAV, M4A, MPEG, WebM (up to 200MB)",
     )
 
 with tab_record:
@@ -85,7 +85,10 @@ with tab_record:
 
         # Convert to MP3 and offer download
         try:
-            mp3_data = convert_wav_to_mp3(audio_recording.getvalue())
+            mp3_data = convert_audio_to_mp3(
+                audio_recording.getvalue(),
+                input_format=audio_recording.format,
+            )
             st.download_button(
                 label="Download Recording as MP3",
                 data=mp3_data,
@@ -136,12 +139,14 @@ if st.button("Transcribe", type="primary", disabled=audio_source is None):
                     tmp.write(uploaded_file.getbuffer())
                     temp_file_path = tmp.name
             elif audio_source_type == "recording":
-                status.update(label="Converting recording to MP3...")
-                try:
-                    temp_file_path = save_recording_as_mp3(audio_source.getvalue())
-                except AudioConversionError as e:
-                    st.error(f"Failed to process recording: {e}")
-                    st.stop()
+                status.update(label="Preparing recording...")
+                # Save compressed audio directly (WebM/MP4)
+                with tempfile.NamedTemporaryFile(
+                    delete=False,
+                    suffix=f".{audio_source.format}",
+                ) as tmp:
+                    tmp.write(audio_source.getvalue())
+                    temp_file_path = tmp.name
 
             # Get MIME type and initialize client
             mime_type = get_mime_type(temp_file_path)
@@ -161,11 +166,13 @@ if st.button("Transcribe", type="primary", disabled=audio_source is None):
 
             # Stream transcription
             transcript_container = st.empty()
-            full_text = ""
+            chunks = []
 
             for chunk in transcribe(client, gemini_file, prompt):
-                full_text += chunk
-                transcript_container.markdown(full_text)
+                chunks.append(chunk)
+                transcript_container.markdown("".join(chunks))
+
+            full_text = "".join(chunks)
 
             status.update(label="Complete!", state="complete")
 
@@ -185,6 +192,11 @@ if st.button("Transcribe", type="primary", disabled=audio_source is None):
         st.error("Audio processing timed out. Try a smaller file or try again later.")
     except FileProcessingError as e:
         st.error(f"Could not process audio file. {e}")
+    except MemoryError:
+        st.error(
+            "Out of memory while processing the recording. "
+            "Try recording shorter segments (under 30 minutes) and processing them separately."
+        )
     except Exception as e:
         st.error(f"An unexpected error occurred: {e}")
 

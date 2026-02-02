@@ -7,6 +7,7 @@ by default browser echo cancellation.
 
 import base64
 import io
+import json
 from pathlib import Path
 
 import streamlit.components.v1 as components
@@ -24,9 +25,23 @@ _component_func = components.declare_component(
 class AudioRecording:
     """Wrapper class to mimic Streamlit's UploadedFile interface."""
 
-    def __init__(self, audio_bytes: bytes):
+    def __init__(
+        self, audio_bytes: bytes, format: str = "wav", mime_type: str = "audio/wav"
+    ):
         self._bytes = audio_bytes
         self._buffer = io.BytesIO(audio_bytes)
+        self._format = format
+        self._mime_type = mime_type
+
+    @property
+    def format(self) -> str:
+        """Return the audio format (e.g., 'webm', 'mp4', 'wav')."""
+        return self._format
+
+    @property
+    def mime_type(self) -> str:
+        """Return the MIME type of the audio."""
+        return self._mime_type
 
     def getvalue(self) -> bytes:
         """Return the audio data as bytes."""
@@ -55,7 +70,7 @@ def audio_recorder(key: str = None) -> AudioRecording | None:
         key: Optional key for the component.
 
     Returns:
-        AudioRecording object with WAV audio data, or None if no recording.
+        AudioRecording object with audio data, or None if no recording.
     """
     # Call the component
     component_value = _component_func(key=key, default=None)
@@ -63,6 +78,20 @@ def audio_recorder(key: str = None) -> AudioRecording | None:
     # If we have a value, decode it from base64
     if component_value is not None and isinstance(component_value, str):
         try:
+            # Try JSON first (new format with metadata)
+            try:
+                parsed = json.loads(component_value)
+                if isinstance(parsed, dict) and "data" in parsed:
+                    audio_bytes = base64.b64decode(parsed["data"])
+                    return AudioRecording(
+                        audio_bytes,
+                        parsed.get("format", "webm"),
+                        parsed.get("mimeType", "audio/webm"),
+                    )
+            except json.JSONDecodeError:
+                pass
+
+            # Fallback: raw base64 WAV (backward compatibility)
             audio_bytes = base64.b64decode(component_value)
             return AudioRecording(audio_bytes)
         except Exception:

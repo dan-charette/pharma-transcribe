@@ -51,6 +51,42 @@ def convert_wav_to_mp3(
         raise AudioConversionError(f"Failed to convert WAV to MP3: {e}") from e
 
 
+def convert_audio_to_mp3(
+    audio_data: bytes,
+    input_format: str,
+    bitrate: str = "192k",
+    sample_rate: int = 44100,
+) -> bytes:
+    """Convert audio bytes from any format to MP3.
+
+    Args:
+        audio_data: Raw audio data as bytes
+        input_format: Input format (e.g., "webm", "mp4", "wav")
+        bitrate: MP3 bitrate (default: "192k")
+        sample_rate: Output sample rate in Hz (default: 44100)
+
+    Returns:
+        MP3 audio data as bytes
+
+    Raises:
+        AudioConversionError: If conversion fails
+    """
+    try:
+        audio = AudioSegment.from_file(io.BytesIO(audio_data), format=input_format)
+
+        if audio.frame_rate != sample_rate:
+            audio = audio.set_frame_rate(sample_rate)
+
+        mp3_buffer = io.BytesIO()
+        audio.export(mp3_buffer, format="mp3", bitrate=bitrate)
+        mp3_buffer.seek(0)
+
+        return mp3_buffer.read()
+
+    except Exception as e:
+        raise AudioConversionError(f"Failed to convert {input_format} to MP3: {e}") from e
+
+
 def save_recording_as_mp3(
     wav_data: bytes,
     output_path: Optional[str] = None,
