@@ -8,12 +8,30 @@ from unittest.mock import MagicMock
 
 import pytest
 
-# Mock streamlit before importing the component
+# Mock streamlit before importing the component, since importing it triggers
+# `streamlit.components.v1.declare_component(...)`, which we don't want to
+# run for real in a unit test. Stash whatever was already in sys.modules
+# first and restore it immediately after the import completes -- pytest
+# imports (collects) every test file before running any test, so leaving the
+# mock in place here would otherwise leak into every other test file's
+# collection and execution (e.g. anything needing the real `streamlit`
+# package, such as Streamlit's own AppTest harness).
+_PRE_MOCK_MODULES = {
+    name: sys.modules.get(name)
+    for name in ("streamlit", "streamlit.components", "streamlit.components.v1")
+}
+
 sys.modules["streamlit"] = MagicMock()
 sys.modules["streamlit.components"] = MagicMock()
 sys.modules["streamlit.components.v1"] = MagicMock()
 
 from src.components.audio_recorder import AudioRecording
+
+for _name, _original in _PRE_MOCK_MODULES.items():
+    if _original is None:
+        sys.modules.pop(_name, None)
+    else:
+        sys.modules[_name] = _original
 
 
 class TestAudioRecording:
