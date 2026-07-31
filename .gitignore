@@ -50,3 +50,8 @@ env/
 # Temporary files
 *.tmp
 *.temp
+
+# App artifacts (auto-saved recordings, transcripts, logs)
+recordings/
+transcripts/
+logs/
