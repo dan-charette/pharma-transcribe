@@ -4,6 +4,7 @@ import base64
 import io
 import json
 import sys
+from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
@@ -165,3 +166,38 @@ class TestAudioRecordingJsonParsing:
             # This is expected - fall back to raw base64
             decoded = base64.b64decode(raw_base64)
             assert decoded == audio_bytes
+
+
+COMPONENT_HTML_PATH = (
+    Path(__file__).resolve().parent.parent
+    / "src" / "components" / "audio_recorder" / "frontend" / "index.html"
+)
+
+
+class TestFrontendHardening:
+    """Guard tests pinning the reliability-critical parts of the frontend."""
+
+    @pytest.fixture(scope="class")
+    def html(self):
+        return COMPONENT_HTML_PATH.read_text(encoding="utf-8")
+
+    def test_uses_filereader_for_base64(self, html):
+        assert "readAsDataURL" in html
+
+    def test_no_manual_base64_loop(self, html):
+        assert "String.fromCharCode.apply" not in html
+
+    def test_uses_indexeddb_checkpointing(self, html):
+        assert "indexedDB.open" in html
+
+    def test_one_second_timeslice(self, html):
+        assert "mediaRecorder.start(1000)" in html
+        assert "mediaRecorder.start(100)" not in html.replace("mediaRecorder.start(1000)", "")
+
+    def test_recovery_banner_present(self, html):
+        assert 'id="recoveryBanner"' in html
+        assert 'id="recoverBtn"' in html
+        assert 'id="discardBtn"' in html
+
+    def test_recorder_error_handler_present(self, html):
+        assert "mediaRecorder.onerror" in html
