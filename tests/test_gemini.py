@@ -9,7 +9,9 @@ from src.gemini_client import (
     transcribe,
     delete_file,
     FileProcessingError,
+    call_with_retries,
 )
+from src import gemini_client as gemini_client_module
 
 
 class TestGetClient:
@@ -30,14 +32,16 @@ class TestGetClient:
 class TestUploadAudio:
     """Tests for upload_audio function."""
 
-    def test_upload_calls_files_upload(self, mock_genai_client, mock_active_file):
+    def test_upload_calls_files_upload(self, mock_genai_client, mock_active_file, tmp_path):
         """Test that upload_audio calls client.files.upload with correct params."""
+        audio_path = tmp_path / "audio.mp3"
+        audio_path.write_bytes(b"fake audio bytes")
         mock_genai_client.files.upload.return_value = mock_active_file
 
-        result = upload_audio(mock_genai_client, "/path/to/audio.mp3", "audio/mpeg")
+        result = upload_audio(mock_genai_client, str(audio_path), "audio/mpeg")
 
         mock_genai_client.files.upload.assert_called_once_with(
-            file="/path/to/audio.mp3",
+            file=str(audio_path),
             config={"mime_type": "audio/mpeg"}
         )
         assert result == mock_active_file
@@ -182,3 +186,66 @@ class TestFileProcessingError:
         """Test that FileProcessingError is an Exception."""
         error = FileProcessingError("Test")
         assert isinstance(error, Exception)
+
+
+class TestCallWithRetries:
+    def test_returns_result_on_first_success(self):
+        assert call_with_retries(lambda: 42) == 42
+
+    def test_retries_on_connection_error_then_succeeds(self, monkeypatch):
+        monkeypatch.setattr(gemini_client_module.time, "sleep", lambda s: None)
+        calls = {"n": 0}
+
+        def flaky():
+            calls["n"] += 1
+            if calls["n"] < 3:
+                raise ConnectionError("transient network blip")
+            return "ok"
+
+        assert call_with_retries(flaky, attempts=3) == "ok"
+        assert calls["n"] == 3
+
+    def test_raises_after_exhausting_attempts(self, monkeypatch):
+        sleeps = []
+        monkeypatch.setattr(gemini_client_module.time, "sleep", sleeps.append)
+
+        def always_fails():
+            raise ConnectionError("still down")
+
+        with pytest.raises(ConnectionError):
+            call_with_retries(always_fails, attempts=3, base_delay=2.0)
+        # Two sleeps between three attempts, exponential backoff
+        assert sleeps == [2.0, 4.0]
+
+    def test_non_retriable_error_propagates_immediately(self, monkeypatch):
+        monkeypatch.setattr(gemini_client_module.time, "sleep", lambda s: None)
+        calls = {"n": 0}
+
+        def bad_request():
+            calls["n"] += 1
+            raise ValueError("bad input")
+
+        with pytest.raises(ValueError):
+            call_with_retries(bad_request, attempts=3)
+        assert calls["n"] == 1
+
+
+class TestWaitForActiveToleratesTransientErrors:
+    def test_transient_poll_error_does_not_abort(self, monkeypatch):
+        monkeypatch.setattr(gemini_client_module.time, "sleep", lambda s: None)
+
+        active_file = MagicMock()
+        active_file.state = "ACTIVE"
+        pending_file = MagicMock()
+        pending_file.state = "PROCESSING"
+        pending_file.name = "files/test123"
+
+        client = MagicMock()
+        client.files.get.side_effect = [
+            ConnectionError("network blip"),
+            active_file,
+        ]
+
+        result = wait_for_active(client, pending_file, timeout_seconds=30, poll_interval=0)
+        assert result is active_file
+        assert client.files.get.call_count == 2
