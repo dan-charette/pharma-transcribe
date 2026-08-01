@@ -113,7 +113,11 @@ def save_transcript(
 def _list_files(directory: Path) -> list[Path]:
     if not directory.is_dir():
         return []
-    files = [p for p in directory.iterdir() if p.is_file() and p.suffix != ".part"]
+    files = [
+        p
+        for p in directory.iterdir()
+        if p.is_file() and p.suffix != ".part" and not p.name.startswith(".")
+    ]
     return sorted(files, key=lambda p: p.stat().st_mtime, reverse=True)
 
 
@@ -124,4 +128,4 @@ def list_recordings(directory: Path | None = None) -> list[Path]:
 
 def list_transcripts(directory: Path | None = None) -> list[Path]:
     """List saved transcripts (including partials), newest first."""
-    return _list_files(directory or TRANSCRIPTS_DIR)
+    return [p for p in _list_files(directory or TRANSCRIPTS_DIR) if p.name.endswith(".txt")]

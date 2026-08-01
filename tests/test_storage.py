@@ -109,3 +109,26 @@ class TestListing:
         (tmp_path / "junk.part").write_bytes(b"tmp")
         listed = list_recordings(directory=tmp_path)
         assert [p.name for p in listed] == ["real.webm"]
+
+    def test_recordings_excludes_dotfiles(self, tmp_path):
+        save_recording(b"a", "webm", stem="real", directory=tmp_path)
+        (tmp_path / ".DS_Store").write_bytes(b"\x00\x01binary junk\xff")
+        listed = list_recordings(directory=tmp_path)
+        assert [p.name for p in listed] == ["real.webm"]
+
+    def test_transcripts_excludes_dotfiles(self, tmp_path):
+        save_transcript("hello", "real", directory=tmp_path)
+        (tmp_path / ".DS_Store").write_bytes(b"\x00\x01binary junk\xff")
+        listed = list_transcripts(directory=tmp_path)
+        assert [p.name for p in listed] == ["real.txt"]
+
+    def test_transcripts_excludes_non_txt_files(self, tmp_path):
+        save_transcript("hello", "real", directory=tmp_path)
+        (tmp_path / "notes.md").write_text("not a transcript", encoding="utf-8")
+        listed = list_transcripts(directory=tmp_path)
+        assert [p.name for p in listed] == ["real.txt"]
+
+    def test_transcripts_includes_partial_txt(self, tmp_path):
+        save_transcript("partial text", "session_x", partial=True, directory=tmp_path)
+        listed = list_transcripts(directory=tmp_path)
+        assert [p.name for p in listed] == ["session_x.partial.txt"]

@@ -288,12 +288,14 @@ if st.button("Transcribe", type="primary", disabled=audio_source is None):
         st.error(f"An unexpected error occurred: {e}")
 
     finally:
-        # Preserve any partial transcript before anything else
+        # Preserve any partial transcript before anything else. No st.* calls
+        # here: this must complete even while the script is being torn down
+        # by a Streamlit rerun (BaseException), which a UI call would abort.
+        partial_path = None
         if chunks and not completed:
             try:
                 partial_path = save_transcript("".join(chunks), stem, partial=True)
                 logger.warning("Preserved partial transcript at %s", partial_path)
-                st.warning(f"A partial transcript was saved to `{partial_path}`.")
             except OSError:
                 logger.exception("Failed to preserve partial transcript")
 
@@ -304,6 +306,14 @@ if st.button("Transcribe", type="primary", disabled=audio_source is None):
         # Cleanup: Delete local temp file (uploads only -- never the saved recording)
         if owns_temp_file and temp_file_path and os.path.exists(temp_file_path):
             os.unlink(temp_file_path)
+
+        # Best-effort UI notice, last: must never mask the original exception
+        # or skip the cleanup above if it raises during teardown.
+        if partial_path is not None:
+            try:
+                st.warning(f"A partial transcript was saved to `{partial_path}`.")
+            except Exception:
+                pass
 
 # --- Download Buttons ---
 if "transcript" in st.session_state and st.session_state["transcript"]:
@@ -356,11 +366,16 @@ with st.expander("Saved sessions on disk"):
     if transcripts:
         st.markdown("**Transcripts**")
         for i, txt in enumerate(transcripts):
+            try:
+                content = txt.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError):
+                logger.warning("Skipping unreadable saved transcript: %s", txt)
+                continue
             entry_col, btn_col = st.columns([4, 1])
             entry_col.markdown(f"- `{txt.name}`")
             btn_col.download_button(
                 "Download",
-                data=txt.read_text(encoding="utf-8"),
+                data=content,
                 file_name=txt.name,
                 key=f"session_dl_{i}",
             )
