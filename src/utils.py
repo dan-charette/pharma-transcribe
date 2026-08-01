@@ -9,6 +9,7 @@ SUPPORTED_EXTENSIONS = {
     ".m4a": "audio/mp4",
     ".mpeg": "audio/mpeg",
     ".webm": "audio/webm",
+    ".mp4": "audio/mp4",
 }
 
 

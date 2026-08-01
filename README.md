@@ -10,6 +10,7 @@ Standard speech-to-text models frequently misinterpret pharmaceutical terminolog
 
 - Upload audio files up to 200MB (MP3, WAV, M4A, MPEG)
 - Record audio directly from your microphone with **speaker audio capture** (captures audio playing through your speakers, perfect for transcribing earnings calls from another browser tab)
+- **Crash-proof by design**: recordings are checkpointed in the browser every second and saved to disk the moment they arrive; transcripts are checkpointed to disk while they stream
 - Inject domain-specific keywords for improved accuracy
 - Real-time streaming transcription display
 - Download transcripts as text or PDF files
@@ -77,6 +78,16 @@ The app will open in your browser at http://localhost:8501
 2. Enter domain keywords (drug names, tickers, technical terms) separated by commas
 3. Click **Transcribe**
 4. Download the completed transcript as TXT or PDF
+
+## Reliability & Recovery
+
+Long recordings (60+ minutes) are protected at every stage:
+
+- **While recording**: every ~1 second of audio is checkpointed to the browser's IndexedDB. If the tab crashes or is closed mid-recording, reopening the app shows a "Recover" banner that restores the checkpoint.
+- **On stop**: the compressed recording is sent to the server and immediately saved to `recordings/session_<timestamp>.<ext>`. The MP3 download is produced once, on disk, via ffmpeg.
+- **While transcribing**: the streaming transcript is checkpointed to `transcripts/session_<timestamp>.partial.txt` as it grows; the final transcript is saved to `transcripts/session_<timestamp>.txt`. If transcription fails midway, the partial file is preserved and its path is shown in the UI.
+- **After a crash or restart**: the "Saved sessions on disk" panel at the bottom of the app lists all recordings and transcripts found on disk.
+- **Logs**: application logs rotate in `logs/transcriber.log` — check them when reporting issues.
 
 ## Testing
 

@@ -4,16 +4,35 @@ import base64
 import io
 import json
 import sys
+from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
 
-# Mock streamlit before importing the component
+# Mock streamlit before importing the component, since importing it triggers
+# `streamlit.components.v1.declare_component(...)`, which we don't want to
+# run for real in a unit test. Stash whatever was already in sys.modules
+# first and restore it immediately after the import completes -- pytest
+# imports (collects) every test file before running any test, so leaving the
+# mock in place here would otherwise leak into every other test file's
+# collection and execution (e.g. anything needing the real `streamlit`
+# package, such as Streamlit's own AppTest harness).
+_PRE_MOCK_MODULES = {
+    name: sys.modules.get(name)
+    for name in ("streamlit", "streamlit.components", "streamlit.components.v1")
+}
+
 sys.modules["streamlit"] = MagicMock()
 sys.modules["streamlit.components"] = MagicMock()
 sys.modules["streamlit.components.v1"] = MagicMock()
 
 from src.components.audio_recorder import AudioRecording
+
+for _name, _original in _PRE_MOCK_MODULES.items():
+    if _original is None:
+        sys.modules.pop(_name, None)
+    else:
+        sys.modules[_name] = _original
 
 
 class TestAudioRecording:
@@ -147,3 +166,38 @@ class TestAudioRecordingJsonParsing:
             # This is expected - fall back to raw base64
             decoded = base64.b64decode(raw_base64)
             assert decoded == audio_bytes
+
+
+COMPONENT_HTML_PATH = (
+    Path(__file__).resolve().parent.parent
+    / "src" / "components" / "audio_recorder" / "frontend" / "index.html"
+)
+
+
+class TestFrontendHardening:
+    """Guard tests pinning the reliability-critical parts of the frontend."""
+
+    @pytest.fixture(scope="class")
+    def html(self):
+        return COMPONENT_HTML_PATH.read_text(encoding="utf-8")
+
+    def test_uses_filereader_for_base64(self, html):
+        assert "readAsDataURL" in html
+
+    def test_no_manual_base64_loop(self, html):
+        assert "String.fromCharCode.apply" not in html
+
+    def test_uses_indexeddb_checkpointing(self, html):
+        assert "indexedDB.open" in html
+
+    def test_one_second_timeslice(self, html):
+        assert "mediaRecorder.start(1000)" in html
+        assert "mediaRecorder.start(100)" not in html.replace("mediaRecorder.start(1000)", "")
+
+    def test_recovery_banner_present(self, html):
+        assert 'id="recoveryBanner"' in html
+        assert 'id="recoverBtn"' in html
+        assert 'id="discardBtn"' in html
+
+    def test_recorder_error_handler_present(self, html):
+        assert "mediaRecorder.onerror" in html
