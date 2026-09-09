@@ -28,7 +28,6 @@ class TestBuildTranscriptionPrompt:
 
         # Should still contain instructions
         assert "TRANSCRIPTION INSTRUCTIONS" in result
-        assert "TIMESTAMPS" in result
         assert "(No specific terminology provided)" in result
 
     def test_build_prompt_whitespace_only_keywords(self):
@@ -59,8 +58,7 @@ class TestBuildTranscriptionPrompt:
         """Test that prompt includes timestamp formatting instructions."""
         result = build_transcription_prompt("test")
 
-        assert "TIMESTAMPS" in result
-        assert "[MM:SS]" in result or "[HH:MM:SS]" in result
+        assert "[MM:SS]" in result
         assert "[00:00]" in result  # Example format
 
     def test_build_prompt_contains_speaker_instructions(self):

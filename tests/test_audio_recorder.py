@@ -2,12 +2,16 @@
 
 import io
 import os
+import subprocess
 import tempfile
+import wave
 
 import pytest
 
 from src.audio_recorder import (
     AudioConversionError,
+    convert_audio_to_mp3,
+    convert_file_to_mp3,
     convert_wav_to_mp3,
     get_audio_duration_seconds,
     save_recording_as_mp3,
@@ -83,6 +87,35 @@ class TestSaveRecordingAsMp3:
             save_recording_as_mp3(b"invalid wav data")
 
 
+class TestConvertAudioToMp3:
+    """Tests for convert_audio_to_mp3 function."""
+
+    def test_converts_wav_to_mp3(self, sample_wav_bytes):
+        """Test that WAV converts to MP3 using generic function."""
+        result = convert_audio_to_mp3(sample_wav_bytes, input_format="wav")
+        assert result is not None
+        assert len(result) > 0
+        # MP3 files start with ID3 tag or sync word
+        assert result[:3] == b"ID3" or result[:2] == b"\xff\xfb"
+
+    def test_raises_error_on_invalid_input(self):
+        """Test that invalid input raises AudioConversionError."""
+        with pytest.raises(AudioConversionError):
+            convert_audio_to_mp3(b"not valid audio data", input_format="wav")
+
+    def test_raises_error_with_format_in_message(self):
+        """Test that error message includes the input format."""
+        with pytest.raises(AudioConversionError, match="webm"):
+            convert_audio_to_mp3(b"not valid audio data", input_format="webm")
+
+    def test_respects_bitrate_parameter(self, sample_wav_bytes):
+        """Test that different bitrates produce different sizes."""
+        low_bitrate = convert_audio_to_mp3(sample_wav_bytes, input_format="wav", bitrate="64k")
+        high_bitrate = convert_audio_to_mp3(sample_wav_bytes, input_format="wav", bitrate="320k")
+        # Higher bitrate should produce larger file
+        assert len(high_bitrate) > len(low_bitrate)
+
+
 class TestGetAudioDurationSeconds:
     """Tests for get_audio_duration_seconds function."""
 
@@ -103,3 +136,55 @@ class TestGetAudioDurationSeconds:
         """Test that unsupported format raises ValueError."""
         with pytest.raises(ValueError, match="Unsupported format"):
             get_audio_duration_seconds(sample_wav_bytes, format="ogg")
+
+
+def _write_test_wav(path, seconds=1, framerate=8000):
+    """Write a short silent WAV file using only the stdlib."""
+    with wave.open(str(path), "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(framerate)
+        wf.writeframes(b"\x00\x00" * framerate * seconds)
+
+
+class TestConvertFileToMp3:
+    def test_converts_wav_file_to_mp3(self, tmp_path):
+        wav_path = tmp_path / "input.wav"
+        _write_test_wav(wav_path)
+
+        result = convert_file_to_mp3(wav_path)
+
+        assert result == tmp_path / "input.mp3"
+        assert result.exists()
+        assert result.stat().st_size > 0
+
+    def test_explicit_output_path(self, tmp_path):
+        wav_path = tmp_path / "input.wav"
+        _write_test_wav(wav_path)
+        out = tmp_path / "custom.mp3"
+
+        result = convert_file_to_mp3(wav_path, output_path=out)
+
+        assert result == out
+        assert out.exists()
+
+    def test_missing_input_raises_conversion_error(self, tmp_path):
+        with pytest.raises(AudioConversionError):
+            convert_file_to_mp3(tmp_path / "nope.wav")
+
+    def test_corrupt_input_raises_conversion_error(self, tmp_path):
+        bad = tmp_path / "bad.wav"
+        bad.write_bytes(b"this is not audio")
+        with pytest.raises(AudioConversionError):
+            convert_file_to_mp3(bad)
+
+    def test_missing_ffmpeg_raises_conversion_error(self, tmp_path, monkeypatch):
+        wav_path = tmp_path / "input.wav"
+        _write_test_wav(wav_path)
+
+        def fake_run(*args, **kwargs):
+            raise FileNotFoundError("ffmpeg")
+
+        monkeypatch.setattr(subprocess, "run", fake_run)
+        with pytest.raises(AudioConversionError, match="ffmpeg"):
+            convert_file_to_mp3(wav_path)

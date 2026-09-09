@@ -29,11 +29,22 @@ class TestGetMimeType:
         assert get_mime_type("audio.mpeg") == "audio/mpeg"
         assert get_mime_type("/path/to/file.mpeg") == "audio/mpeg"
 
+    def test_webm_mime_type(self):
+        """Test WebM file returns correct MIME type."""
+        assert get_mime_type("audio.webm") == "audio/webm"
+        assert get_mime_type("/path/to/file.webm") == "audio/webm"
+
+    def test_mp4_mime_type(self):
+        """Test MP4 file returns correct MIME type (Safari/iOS recordings)."""
+        assert get_mime_type("audio.mp4") == "audio/mp4"
+        assert get_mime_type("/path/to/file.mp4") == "audio/mp4"
+
     def test_uppercase_extension(self):
         """Test that uppercase extensions work."""
         assert get_mime_type("audio.MP3") == "audio/mpeg"
         assert get_mime_type("audio.WAV") == "audio/wav"
         assert get_mime_type("audio.M4A") == "audio/mp4"
+        assert get_mime_type("audio.WEBM") == "audio/webm"
 
     def test_mixed_case_extension(self):
         """Test that mixed case extensions work."""
@@ -149,6 +160,14 @@ class TestSupportedExtensions:
         """Test that MPEG is supported."""
         assert ".mpeg" in SUPPORTED_EXTENSIONS
 
+    def test_supported_extensions_contains_webm(self):
+        """Test that WebM is supported."""
+        assert ".webm" in SUPPORTED_EXTENSIONS
+
+    def test_supported_extensions_contains_mp4(self):
+        """Test that MP4 is supported (Safari/iOS recordings)."""
+        assert ".mp4" in SUPPORTED_EXTENSIONS
+
     def test_supported_extensions_count(self):
-        """Test that we have exactly 4 supported formats."""
-        assert len(SUPPORTED_EXTENSIONS) == 4
+        """Test that we have exactly 6 supported formats."""
+        assert len(SUPPORTED_EXTENSIONS) == 6

@@ -121,6 +121,40 @@
             color: #dc3545;
             font-size: 14px;
         }
+
+        .duration-warning {
+            background: #fff3cd;
+            border: 1px solid #ffc107;
+            border-radius: 4px;
+            padding: 8px 12px;
+            font-size: 13px;
+            color: #856404;
+            display: none;
+        }
+
+        .duration-warning.visible {
+            display: block;
+        }
+
+        .recovery-banner {
+            background: #e7f3ff;
+            border: 1px solid #4b9fff;
+            border-radius: 4px;
+            padding: 8px 12px;
+            font-size: 13px;
+            color: #1a5fa8;
+            display: none;
+        }
+
+        .recovery-banner button {
+            margin-left: 8px;
+            padding: 4px 10px;
+            border-radius: 4px;
+            border: 1px solid #4b9fff;
+            background: white;
+            cursor: pointer;
+            font-size: 13px;
+        }
     </style>
 </head>
 <body>
@@ -136,6 +170,14 @@
             <audio id="audioPreview" class="audio-preview" controls></audio>
         </div>
         <div id="error" class="error" style="display: none;"></div>
+        <div id="durationWarning" class="duration-warning">
+            ⚠️ Recording is over 30 minutes. Consider stopping and processing in segments for best results.
+        </div>
+        <div id="recoveryBanner" class="recovery-banner">
+            <span id="recoveryText"></span>
+            <button id="recoverBtn">Recover</button>
+            <button id="discardBtn">Discard</button>
+        </div>
         <div class="info-text">
             Speaker audio capture enabled (echo cancellation disabled)
         </div>
@@ -183,6 +225,14 @@
         const audioContainer = document.getElementById('audioContainer');
         const audioPreview = document.getElementById('audioPreview');
         const errorDiv = document.getElementById('error');
+        const durationWarning = document.getElementById('durationWarning');
+        const recoveryBanner = document.getElementById('recoveryBanner');
+        const recoveryText = document.getElementById('recoveryText');
+        const recoverBtn = document.getElementById('recoverBtn');
+        const discardBtn = document.getElementById('discardBtn');
+
+        // Warning threshold: 30 minutes in seconds
+        const DURATION_WARNING_THRESHOLD = 30 * 60;
 
         // Format time as MM:SS
         function formatTime(seconds) {
@@ -196,107 +246,122 @@
             if (startTime) {
                 const elapsed = (Date.now() - startTime) / 1000;
                 timer.textContent = formatTime(elapsed);
+
+                // Show warning if recording exceeds threshold
+                if (elapsed >= DURATION_WARNING_THRESHOLD) {
+                    durationWarning.classList.add('visible');
+                    setFrameHeight(180);
+                }
             }
         }
 
-        // Convert AudioBuffer to WAV format
-        function audioBufferToWav(buffer) {
-            const numChannels = 1; // Mono
-            const sampleRate = buffer.sampleRate;
-            const format = 1; // PCM
-            const bitDepth = 16;
+        // --- IndexedDB checkpointing --------------------------------------
+        // Every recorded chunk is checkpointed so a tab crash mid-recording
+        // loses at most ~1 second of audio. Checkpoints are cleared when a
+        // new recording starts or the user discards them -- deliberately not
+        // right after sending, so a backend crash during send still leaves
+        // the browser-side copy intact.
+        const DB_NAME = 'transcriber-recorder';
+        const CHUNK_STORE = 'chunks';
+        let chunkSeq = 0;
 
-            // Get audio data (mono - use first channel or mix down)
-            let audioData;
-            if (buffer.numberOfChannels === 1) {
-                audioData = buffer.getChannelData(0);
-            } else {
-                // Mix down to mono
-                const left = buffer.getChannelData(0);
-                const right = buffer.getChannelData(1);
-                audioData = new Float32Array(left.length);
-                for (let i = 0; i < left.length; i++) {
-                    audioData[i] = (left[i] + right[i]) / 2;
-                }
-            }
-
-            const dataLength = audioData.length * (bitDepth / 8);
-            const bufferLength = 44 + dataLength;
-            const arrayBuffer = new ArrayBuffer(bufferLength);
-            const view = new DataView(arrayBuffer);
-
-            // WAV header
-            const writeString = (offset, string) => {
-                for (let i = 0; i < string.length; i++) {
-                    view.setUint8(offset + i, string.charCodeAt(i));
-                }
-            };
-
-            writeString(0, 'RIFF');
-            view.setUint32(4, bufferLength - 8, true);
-            writeString(8, 'WAVE');
-            writeString(12, 'fmt ');
-            view.setUint32(16, 16, true); // Subchunk1Size
-            view.setUint16(20, format, true);
-            view.setUint16(22, numChannels, true);
-            view.setUint32(24, sampleRate, true);
-            view.setUint32(28, sampleRate * numChannels * (bitDepth / 8), true);
-            view.setUint16(32, numChannels * (bitDepth / 8), true);
-            view.setUint16(34, bitDepth, true);
-            writeString(36, 'data');
-            view.setUint32(40, dataLength, true);
-
-            // Write audio data
-            const offset = 44;
-            for (let i = 0; i < audioData.length; i++) {
-                const sample = Math.max(-1, Math.min(1, audioData[i]));
-                const intSample = sample < 0 ? sample * 0x8000 : sample * 0x7FFF;
-                view.setInt16(offset + i * 2, intSample, true);
-            }
-
-            return arrayBuffer;
+        function openDb() {
+            return new Promise((resolve, reject) => {
+                const req = indexedDB.open(DB_NAME, 1);
+                req.onupgradeneeded = () => {
+                    const db = req.result;
+                    if (!db.objectStoreNames.contains(CHUNK_STORE)) {
+                        db.createObjectStore(CHUNK_STORE, { keyPath: 'seq' });
+                    }
+                };
+                req.onsuccess = () => resolve(req.result);
+                req.onerror = () => reject(req.error);
+            });
         }
 
-        // Convert blob to WAV and send to Streamlit
-        async function processRecording(blob) {
+        async function idbPutChunk(seq, blob, mimeType) {
+            const db = await openDb();
+            return new Promise((resolve, reject) => {
+                const tx = db.transaction(CHUNK_STORE, 'readwrite');
+                tx.objectStore(CHUNK_STORE).put({ seq: seq, blob: blob, mimeType: mimeType });
+                tx.oncomplete = () => { db.close(); resolve(); };
+                tx.onerror = () => { db.close(); reject(tx.error); };
+            });
+        }
+
+        async function idbLoadChunks() {
+            const db = await openDb();
+            return new Promise((resolve, reject) => {
+                const tx = db.transaction(CHUNK_STORE, 'readonly');
+                const req = tx.objectStore(CHUNK_STORE).getAll();
+                req.onsuccess = () => {
+                    db.close();
+                    resolve(req.result.sort((a, b) => a.seq - b.seq));
+                };
+                req.onerror = () => { db.close(); reject(req.error); };
+            });
+        }
+
+        async function idbClearChunks() {
+            const db = await openDb();
+            return new Promise((resolve, reject) => {
+                const tx = db.transaction(CHUNK_STORE, 'readwrite');
+                tx.objectStore(CHUNK_STORE).clear();
+                tx.oncomplete = () => { db.close(); resolve(); };
+                tx.onerror = () => { db.close(); reject(tx.error); };
+            });
+        }
+
+        // Efficient base64 without giant intermediate strings
+        function blobToBase64(blob) {
+            return new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onerror = () => reject(reader.error);
+                reader.onload = () => {
+                    const dataUrl = reader.result;
+                    resolve(dataUrl.substring(dataUrl.indexOf(',') + 1));
+                };
+                reader.readAsDataURL(blob);
+            });
+        }
+
+        // Process recording and send compressed audio directly to Streamlit
+        async function processRecording(blob, mimeTypeOverride) {
             try {
                 status.textContent = 'Processing...';
 
-                // Create audio context for decoding
-                audioContext = new (window.AudioContext || window.webkitAudioContext)();
-
-                // Read blob as array buffer
-                const arrayBuffer = await blob.arrayBuffer();
-
-                // Decode audio data
-                const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
-
-                // Convert to WAV
-                const wavBuffer = audioBufferToWav(audioBuffer);
-
-                // Convert to base64
-                const wavBytes = new Uint8Array(wavBuffer);
-                let binary = '';
-                for (let i = 0; i < wavBytes.byteLength; i++) {
-                    binary += String.fromCharCode(wavBytes[i]);
+                const mimeType = mimeTypeOverride
+                    || (mediaRecorder && mediaRecorder.mimeType)
+                    || blob.type
+                    || 'audio/webm';
+                let format = 'webm';
+                if (mimeType.includes('mp4') || mimeType.includes('m4a')) {
+                    format = 'mp4';
                 }
-                const base64 = btoa(binary);
 
-                // Send to Streamlit
-                setComponentValue(base64);
+                // Read blob directly (NO DECODING - keep compressed!)
+                const base64 = await blobToBase64(blob);
+
+                // Send JSON with format metadata
+                setComponentValue(JSON.stringify({
+                    data: base64,
+                    format: format,
+                    mimeType: mimeType
+                }));
 
                 // Update UI
+                const sizeKB = (blob.size / 1024).toFixed(1);
                 status.className = 'status success';
-                status.textContent = `Recording captured (${(wavBytes.length / 1024).toFixed(1)} KB)`;
+                status.textContent = `Recording captured (${sizeKB} KB)`;
 
-                // Show audio preview
-                const wavBlob = new Blob([wavBuffer], { type: 'audio/wav' });
-                audioPreview.src = URL.createObjectURL(wavBlob);
+                // Preview using original blob
+                audioPreview.src = URL.createObjectURL(blob);
                 audioContainer.style.display = 'block';
 
             } catch (err) {
                 console.error('Error processing recording:', err);
-                errorDiv.textContent = 'Error processing recording: ' + err.message;
+                errorDiv.textContent = 'Error processing recording: ' + err.message
+                    + ' (your audio is still checkpointed locally -- reload to recover)';
                 errorDiv.style.display = 'block';
             }
         }
@@ -305,6 +370,15 @@
         async function startRecording() {
             try {
                 errorDiv.style.display = 'none';
+                durationWarning.classList.remove('visible');
+                recoveryBanner.style.display = 'none';
+                chunkSeq = 0;
+                try {
+                    await idbClearChunks();
+                } catch (e) {
+                    console.error('Could not clear old checkpoints:', e);
+                }
+                setFrameHeight(150);
 
                 // Request microphone with echo cancellation DISABLED
                 const constraints = {
@@ -340,6 +414,9 @@
                 mediaRecorder.ondataavailable = (event) => {
                     if (event.data.size > 0) {
                         audioChunks.push(event.data);
+                        chunkSeq += 1;
+                        idbPutChunk(chunkSeq, event.data, mediaRecorder.mimeType)
+                            .catch((err) => console.error('Checkpoint write failed:', err));
                     }
                 };
 
@@ -348,7 +425,14 @@
                     processRecording(blob);
                 };
 
-                mediaRecorder.start(100); // Collect data every 100ms
+                mediaRecorder.onerror = (event) => {
+                    console.error('MediaRecorder error:', event.error || event);
+                    errorDiv.textContent = 'Recording error -- salvaging captured audio.';
+                    errorDiv.style.display = 'block';
+                    stopRecording();
+                };
+
+                mediaRecorder.start(1000); // Collect data every 1s (checkpointed to IndexedDB)
                 isRecording = true;
                 startTime = Date.now();
 
@@ -403,10 +487,44 @@
             }
         });
 
+        // Offer recovery of chunks left behind by a crashed/closed tab
+        async function checkRecovery() {
+            try {
+                const records = await idbLoadChunks();
+                if (records.length === 0) {
+                    return;
+                }
+                const totalBytes = records.reduce((sum, r) => sum + r.blob.size, 0);
+                const mimeType = records[0].mimeType || 'audio/webm';
+                const totalMB = (totalBytes / (1024 * 1024)).toFixed(1);
+                recoveryText.textContent =
+                    `Found an unsent recording checkpoint (${totalMB} MB).`;
+                recoveryBanner.style.display = 'block';
+                setFrameHeight(220);
+
+                recoverBtn.onclick = async () => {
+                    recoveryBanner.style.display = 'none';
+                    const blob = new Blob(records.map((r) => r.blob), { type: mimeType });
+                    await processRecording(blob, mimeType);
+                };
+                discardBtn.onclick = async () => {
+                    try {
+                        await idbClearChunks();
+                    } catch (e) {
+                        console.error('Could not discard checkpoints:', e);
+                    }
+                    recoveryBanner.style.display = 'none';
+                };
+            } catch (err) {
+                console.error('Recovery check failed:', err);
+            }
+        }
+
         // Initialize component
         function init() {
             setFrameHeight(150);
             setComponentReady();
+            checkRecovery();
         }
 
         // Handle messages from Streamlit
