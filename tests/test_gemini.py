@@ -127,7 +127,7 @@ class TestTranscribe:
 
         mock_genai_client.models.generate_content_stream.assert_called_once()
         call_kwargs = mock_genai_client.models.generate_content_stream.call_args
-        assert call_kwargs.kwargs["model"] == "gemini-2.5-flash"
+        assert call_kwargs.kwargs["model"] == "gemini-3.5-flash"
         assert "Test prompt" in call_kwargs.kwargs["contents"]
 
     def test_transcribe_handles_empty_chunks(self, mock_genai_client, mock_active_file):

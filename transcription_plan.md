@@ -65,7 +65,7 @@ Keywords are injected into the system prompt to resolve phonetic ambiguity.
 
 ### 4.3 Transcription Engine
 
-**Model:** `gemini-2.5-flash`
+**Model:** `gemini-3.5-flash`
 
 **Generation Config:**
 ```python
@@ -259,13 +259,13 @@ MOCK_GENERATION_RESPONSE = {
   ```python
   def transcribe(client: genai.Client, file: genai.File, system_prompt: str) -> Iterator[str]:
       """
-      Generate transcript using gemini-2.5-flash with streaming.
+      Generate transcript using gemini-3.5-flash with streaming.
       Args:
           file: Active Gemini File object
           system_prompt: Formatted prompt from prompts.py
       Yields: Text chunks as they stream in
       """
-      model = client.get_model("gemini-2.5-flash")
+      model = client.get_model("gemini-3.5-flash")
       # Use generation_config: temperature=0.1, max_output_tokens=32768
   ```
 

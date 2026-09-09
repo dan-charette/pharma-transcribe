@@ -169,9 +169,9 @@ def transcribe(
     Yields:
         Text chunks as they stream in
     """
-    logger.info("Starting transcription with model=%s file=%s", "gemini-2.5-flash", file.name)
+    logger.info("Starting transcription with model=%s file=%s", "gemini-3.5-flash", file.name)
     response = client.models.generate_content_stream(
-        model="gemini-2.5-flash",
+        model="gemini-3.5-flash",
         contents=[system_prompt, file],
         config=types.GenerateContentConfig(
             temperature=0.1,
