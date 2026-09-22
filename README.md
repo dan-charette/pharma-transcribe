@@ -4,14 +4,15 @@ Transcribe pharmaceutical earnings calls with domain-aware accuracy using Gemini
 
 ## Overview
 
-Standard speech-to-text models frequently misinterpret pharmaceutical terminology (drug names, chemical compounds, MOA acronyms). PharmaTranscribe solves this with a "Context Injection" system where you supply a keyword list that primes the model before transcription, significantly reducing phonetic hallucinations.
+PharmaTranscribe produces speaker-labelled, timestamped transcripts of earnings calls. It uses Gemini's dedicated speech-to-text model (`gemini-3.5-transcribe`) and automatically falls back to `gemini-2.5-flash` for recordings over 30 minutes, or when the transcribe model is overloaded, rate-limited, or fails. After transcription, speakers are named from the transcript itself (self-introductions, handoffs, the operator introducing analysts); the words are never changed, and if naming fails the transcript keeps its Speaker 1 / Speaker 2 labels.
 
 ## Features
 
 - Upload audio files up to 200MB (MP3, WAV, M4A, MPEG)
 - Record audio directly from your microphone with **speaker audio capture** (captures audio playing through your speakers, perfect for transcribing earnings calls from another browser tab)
 - **Crash-proof by design**: recordings are checkpointed in the browser every second and saved to disk the moment they arrive; transcripts are checkpointed to disk while they stream
-- Inject domain-specific keywords for improved accuracy
+- Automatic speaker labels and timestamps, with automatic model fallback
+- Speakers named automatically from introductions in the call (`fix_speakers.py` re-runs this on any saved transcript)
 - Real-time streaming transcription display
 - Download transcripts as text or PDF files
 
@@ -75,9 +76,8 @@ The app will open in your browser at http://localhost:8501
 1. Choose input method:
    - **Upload File**: Select an existing audio file (MP3, WAV, M4A, or MPEG up to 200MB)
    - **Record Audio**: Click the record button to capture audio. This mode has echo cancellation disabled, so it will capture audio playing through your computer's speakers (e.g., an earnings call playing in another browser tab)
-2. Enter domain keywords (drug names, tickers, technical terms) separated by commas
-3. Click **Transcribe**
-4. Download the completed transcript as TXT or PDF
+2. Click **Transcribe**
+3. Download the completed transcript as TXT or PDF
 
 ## Reliability & Recovery
 

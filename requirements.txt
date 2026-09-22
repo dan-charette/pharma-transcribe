@@ -1,7 +1,7 @@
 streamlit>=1.33.0
 pydub>=0.25.1
 audioop-lts>=0.2.1
-google-genai>=1.0.0
+google-genai>=2.0.0  # audio_transcription parts (gemini-3.5-transcribe)
 google-api-core>=2.0.0
 python-dotenv>=1.0.0
 fpdf2>=2.7.0
