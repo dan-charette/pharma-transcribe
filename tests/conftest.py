@@ -40,12 +40,6 @@ def mock_failed_file():
 
 
 @pytest.fixture
-def sample_keywords():
-    """Return sample pharmaceutical keywords."""
-    return "Keytruda, pembrolizumab, VRTX, Vertex Pharmaceuticals, tezacaftor"
-
-
-@pytest.fixture
 def mock_transcript_response():
     """Return a mock streaming response with transcript chunks."""
     chunks = [

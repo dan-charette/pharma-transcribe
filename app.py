@@ -14,6 +14,7 @@ from google.genai import errors as genai_errors
 from src.audio_recorder import AudioConversionError, convert_file_to_mp3
 from src.components.audio_recorder import audio_recorder
 from src.gemini_client import (
+    TRANSCRIBE_MODEL,
     FileProcessingError,
     delete_file,
     get_client,
@@ -22,7 +23,8 @@ from src.gemini_client import (
     wait_for_active,
 )
 from src.logging_config import setup_logging
-from src.prompts import build_transcription_prompt
+from src.prompts import TRANSCRIPTION_PROMPT
+from src.speakers import name_speakers
 from src.storage import (
     list_recordings,
     list_transcripts,
@@ -173,14 +175,6 @@ elif audio_recording:
     audio_source = audio_recording
     audio_source_type = "recording"
 
-st.header("Context Keywords")
-
-keywords = st.text_area(
-    "Enter domain-specific terminology",
-    placeholder="Enter drug names, tickers, separated by commas (e.g., Keytruda, VRTX, pembrolizumab)",
-    help="These terms will be used to improve transcription accuracy for pharmaceutical terminology",
-)
-
 # --- Transcription ---
 if st.button("Transcribe", type="primary", disabled=audio_source is None):
     if audio_source is None:
@@ -194,6 +188,7 @@ if st.button("Transcribe", type="primary", disabled=audio_source is None):
     owns_temp_file = False
     completed = False
     chunks = []
+    speaker_naming_failed = False
 
     # Recordings reuse their save-time stem so the transcript pairs with the
     # audio file; uploads get a fresh stem per transcription run.
@@ -234,15 +229,19 @@ if st.button("Transcribe", type="primary", disabled=audio_source is None):
             status.update(label="Processing audio (this may take a few minutes)...")
             gemini_file = wait_for_active(client, gemini_file)
 
-            # Build prompt and transcribe
             status.update(label="Generating transcript...")
-            prompt = build_transcription_prompt(keywords)
 
             # Stream transcription, checkpointing partial text to disk
             transcript_container = st.empty()
             chars_at_last_save = 0
 
-            for chunk in transcribe(client, gemini_file, prompt):
+            models_used = []
+
+            def show_model(model: str) -> None:
+                models_used.append(model)
+                status.update(label=f"Generating transcript ({model})...")
+
+            for chunk in transcribe(client, gemini_file, TRANSCRIPTION_PROMPT, on_model_selected=show_model):
                 chunks.append(chunk)
                 text_so_far = "".join(chunks)
                 transcript_container.markdown(text_so_far)
@@ -255,6 +254,20 @@ if st.button("Transcribe", type="primary", disabled=audio_source is None):
             completed = True
             logger.info("Transcription complete: %d chars", len(full_text))
 
+            # Best effort: the unnamed transcript is already saved, so a
+            # failure here only costs the names.
+            status.update(label="Identifying speakers...")
+            try:
+                # 3.5-transcribe labels are voice-recognition labels.
+                by_voice = models_used == [TRANSCRIBE_MODEL]
+                named_text = name_speakers(client, full_text, by_voice=by_voice)
+                if named_text != full_text:
+                    full_text = named_text
+                    transcript_path = save_transcript(full_text, stem)
+            except Exception:
+                logger.exception("Speaker naming failed; keeping unnamed transcript")
+                speaker_naming_failed = True
+
             status.update(label="Complete!", state="complete")
 
         # Store transcript in session state for download
@@ -262,6 +275,8 @@ if st.button("Transcribe", type="primary", disabled=audio_source is None):
         st.session_state.pop("transcript_pdf", None)
 
         st.success(f"Transcription complete! Saved to `{transcript_path}`")
+        if speaker_naming_failed:
+            st.warning("Couldn't identify speaker names, so speakers are labelled Speaker 1, Speaker 2, etc.")
 
         # Display transcript outside the status container so it's visible after status collapses
         if full_text:

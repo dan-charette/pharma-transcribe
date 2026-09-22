@@ -1,7 +1,7 @@
 """Chunked transcription for long recordings (90 min+).
 
 Why this exists: a single-pass request over 2 hours of audio makes
-gemini-3.5-flash lose the thread. Observed on a 1:59:39 recording -- clean
+gemini-2.5-flash lose the thread. Observed on a 1:59:39 recording -- clean
 output to ~00:34, then the model looped one Q&A block 28 times and drifted
 its own clock to [09:41:00] (wall-clock, not elapsed) until it hit the
 output cap. Raising max_output_tokens does not fix this; it just buys more
@@ -47,11 +47,11 @@ from transcribe_file import DEFAULT_KEYWORDS
 
 logger = get_logger("transcribe_long")
 
-MODEL = "gemini-3.5-flash"
+MODEL = "gemini-2.5-flash"
 # Standardized on a single model. If the model is saturated (503), the
 # transcribe loop retries each segment with backoff rather than losing the
 # run; a custom --model still falls back to this default.
-MODEL_FALLBACKS = ["gemini-3.5-flash"]
+MODEL_FALLBACKS = ["gemini-2.5-flash"]
 MAX_OUTPUT_TOKENS = 65536
 # 40 min ~= 77k input tokens: safely under a 250k tokens-per-minute cap,
 # and only 3 requests for a 2-hour file against a 20-requests-per-day cap.

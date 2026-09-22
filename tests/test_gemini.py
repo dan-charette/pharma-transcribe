@@ -2,6 +2,8 @@
 
 import pytest
 from unittest.mock import Mock, MagicMock, patch
+from google.genai import errors as genai_errors
+from google.genai import types
 from src.gemini_client import (
     get_client,
     upload_audio,
@@ -105,8 +107,34 @@ class TestWaitForActive:
         assert "processing failed" in str(exc_info.value)
 
 
+def _asr_segment(text, speaker, start):
+    return types.Part(audio_transcription=types.Transcription(
+        text=text,
+        speaker_label=speaker,
+        words=[types.WordInfo(word=text.split()[0], start_offset=start, end_offset=start)],
+    ))
+
+
+def _asr_response(parts, finish_reason=types.FinishReason.STOP):
+    return types.GenerateContentResponse(candidates=[types.Candidate(
+        content=types.Content(role="model", parts=parts),
+        finish_reason=finish_reason,
+    )])
+
+
+def _audio_minutes(client, minutes):
+    client.models.count_tokens.return_value = Mock(
+        total_tokens=int(minutes * 60 * gemini_client_module.COUNT_TOKENS_PER_SECOND)
+    )
+
+
 class TestTranscribe:
-    """Tests for transcribe function."""
+    """Tests for transcribe via the fallback model (gemini-2.5-flash)."""
+
+    @pytest.fixture(autouse=True)
+    def long_audio(self, mock_genai_client):
+        """Audio past the transcribe model's cap routes to the fallback."""
+        _audio_minutes(mock_genai_client, 90)
 
     def test_transcribe_yields_chunks(self, mock_genai_client, mock_active_file, mock_transcript_response):
         """Test that transcribe yields text chunks."""
@@ -127,7 +155,7 @@ class TestTranscribe:
 
         mock_genai_client.models.generate_content_stream.assert_called_once()
         call_kwargs = mock_genai_client.models.generate_content_stream.call_args
-        assert call_kwargs.kwargs["model"] == "gemini-3.5-flash"
+        assert call_kwargs.kwargs["model"] == "gemini-2.5-flash"
         assert "Test prompt" in call_kwargs.kwargs["contents"]
 
     def test_transcribe_handles_empty_chunks(self, mock_genai_client, mock_active_file):
@@ -143,6 +171,101 @@ class TestTranscribe:
         result = list(transcribe(mock_genai_client, mock_active_file, "Test prompt"))
 
         assert result == ["Hello ", "World"]
+
+
+class TestTranscribeModelSelection:
+    """Tests for preferring gemini-3.5-transcribe and falling back."""
+
+    @pytest.fixture(autouse=True)
+    def no_sleep(self):
+        with patch("src.gemini_client.time.sleep"):
+            yield
+
+    def _fallback_stream(self, client):
+        client.models.generate_content_stream.return_value = iter([Mock(text="fallback text")])
+
+    def test_short_audio_uses_transcribe_model(self, mock_genai_client, mock_active_file):
+        _audio_minutes(mock_genai_client, 20)
+        mock_genai_client.models.generate_content.return_value = _asr_response([
+            _asr_segment("Welcome to the call.", "spk:0", "0.200s"),
+            _asr_segment("Thanks for having me.", "spk:1", "24.800s"),
+            _asr_segment("Great question.", "spk:1", "3725.5s"),
+            _asr_segment("Next one.", "spk:0", "3790s"),
+        ])
+        selected = []
+
+        chunks = list(transcribe(
+            mock_genai_client, mock_active_file, "Test prompt", on_model_selected=selected.append
+        ))
+
+        assert chunks == [
+            "[00:00:00] Speaker 1: Welcome to the call.\n\n",
+            "[00:00:24] Speaker 2: Thanks for having me. Great question.\n\n",
+            "[01:03:10] Speaker 1: Next one.\n\n",
+        ]
+        assert selected == ["gemini-3.5-transcribe"]
+        call_kwargs = mock_genai_client.models.generate_content.call_args.kwargs
+        assert call_kwargs["model"] == "gemini-3.5-transcribe"
+        asr_config = call_kwargs["config"].audio_transcription_config
+        assert asr_config.diarization and asr_config.word_timestamp
+        mock_genai_client.models.generate_content_stream.assert_not_called()
+
+    def test_long_audio_skips_transcribe_model(self, mock_genai_client, mock_active_file):
+        _audio_minutes(mock_genai_client, 31)
+        self._fallback_stream(mock_genai_client)
+        selected = []
+
+        chunks = list(transcribe(
+            mock_genai_client, mock_active_file, "Test prompt", on_model_selected=selected.append
+        ))
+
+        assert chunks == ["fallback text"]
+        assert selected == ["gemini-2.5-flash"]
+        mock_genai_client.models.generate_content.assert_not_called()
+
+    def test_count_tokens_failure_falls_back(self, mock_genai_client, mock_active_file):
+        mock_genai_client.models.count_tokens.side_effect = ConnectionError("network down")
+        self._fallback_stream(mock_genai_client)
+
+        assert list(transcribe(mock_genai_client, mock_active_file, "Test prompt")) == ["fallback text"]
+        mock_genai_client.models.generate_content.assert_not_called()
+
+    @pytest.mark.parametrize("error", [
+        genai_errors.ServerError(503, {"error": {"message": "overloaded"}}),
+        genai_errors.ClientError(429, {"error": {"message": "quota"}}),
+        genai_errors.ClientError(400, {"error": {"message": "input too long"}}),
+    ])
+    def test_api_errors_fall_back(self, mock_genai_client, mock_active_file, error):
+        _audio_minutes(mock_genai_client, 20)
+        mock_genai_client.models.generate_content.side_effect = error
+        self._fallback_stream(mock_genai_client)
+
+        assert list(transcribe(mock_genai_client, mock_active_file, "Test prompt")) == ["fallback text"]
+
+    def test_server_error_retried_once_before_fallback(self, mock_genai_client, mock_active_file):
+        _audio_minutes(mock_genai_client, 20)
+        mock_genai_client.models.generate_content.side_effect = genai_errors.ServerError(
+            503, {"error": {"message": "overloaded"}}
+        )
+        self._fallback_stream(mock_genai_client)
+
+        list(transcribe(mock_genai_client, mock_active_file, "Test prompt"))
+
+        assert mock_genai_client.models.generate_content.call_count == 2
+
+    @pytest.mark.parametrize("response", [
+        _asr_response([]),
+        _asr_response([types.Part(audio_transcription=types.Transcription(text="  "))]),
+        _asr_response(
+            [_asr_segment("Cut off", "spk:0", "0s")], finish_reason=types.FinishReason.MAX_TOKENS
+        ),
+    ])
+    def test_empty_or_truncated_output_falls_back(self, mock_genai_client, mock_active_file, response):
+        _audio_minutes(mock_genai_client, 20)
+        mock_genai_client.models.generate_content.return_value = response
+        self._fallback_stream(mock_genai_client)
+
+        assert list(transcribe(mock_genai_client, mock_active_file, "Test prompt")) == ["fallback text"]
 
 
 class TestDeleteFile:

@@ -33,8 +33,8 @@ from src.utils import get_mime_type, validate_audio_file
 
 logger = get_logger("transcribe_cli")
 
-MODEL = "gemini-3.5-flash"
-# 3.5 Flash tops out here; the app's 32768 truncates a 2-hour transcript.
+MODEL = "gemini-2.5-flash"
+# 2.5 Flash tops out here; the app's 32768 truncates a 2-hour transcript.
 MAX_OUTPUT_TOKENS = 65536
 # Checkpoint cadence, matching the app's behaviour.
 CHECKPOINT_CHARS = 2000

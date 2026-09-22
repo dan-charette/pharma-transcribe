@@ -2,7 +2,7 @@
 
 import os
 import time
-from typing import Iterator
+from typing import Callable, Iterator, Optional
 
 from google import genai
 from google.genai import errors as genai_errors
@@ -154,24 +154,144 @@ def wait_for_active(
         time.sleep(poll_interval)
 
 
+TRANSCRIBE_MODEL = "gemini-3.5-transcribe"
+FALLBACK_MODEL = "gemini-2.5-flash"
+# count_tokens bills audio at ~32 tokens/s; divide to estimate duration.
+COUNT_TOKENS_PER_SECOND = 32
+# The input cap (98,304 tokens) allows ~65 min, but the binding limit is the
+# 32,768-token output cap: word timestamps cost several tokens per word, so a
+# dense 48-min earnings call (~7,000 words) truncates while 23 min fits.
+TRANSCRIBE_MAX_SECONDS = 30 * 60
+
+
+def _estimate_audio_seconds(client: genai.Client, file: types.File) -> float:
+    count = client.models.count_tokens(model=TRANSCRIBE_MODEL, contents=[file])
+    return (count.total_tokens or 0) / COUNT_TOKENS_PER_SECOND
+
+
+def _parse_offset(offset: Optional[str]) -> float:
+    """Parse a duration string like "24.800s" into seconds."""
+    try:
+        return float((offset or "0").rstrip("s"))
+    except ValueError:
+        return 0.0
+
+
+def _format_timestamp(seconds: float) -> str:
+    total = int(seconds)
+    return f"[{total // 3600:02d}:{total % 3600 // 60:02d}:{total % 60:02d}]"
+
+
+def _speaker_name(label: Optional[str]) -> str:
+    """Map diarization labels like "spk:0" to "Speaker 1"."""
+    try:
+        return f"Speaker {int((label or '').rsplit(':', 1)[-1]) + 1}"
+    except ValueError:
+        return "Speaker"
+
+
+def _transcribe_with_asr_model(client: genai.Client, file: types.File) -> list[str]:
+    """Transcribe with the dedicated ASR model, returning formatted paragraphs.
+
+    This model ignores text prompts and
+    returns `audio_transcription` parts instead of text; speaker labels and
+    timestamps come from the transcription config. Consecutive segments from
+    the same speaker are merged into one paragraph.
+    """
+    response = call_with_retries(
+        lambda: client.models.generate_content(
+            model=TRANSCRIBE_MODEL,
+            contents=[file],
+            config=types.GenerateContentConfig(
+                audio_transcription_config=types.AudioTranscriptionConfig(
+                    diarization=True, word_timestamp=True
+                ),
+            ),
+        ),
+        attempts=2,  # a fallback model is waiting; don't linger on 503s
+        description="Gemini transcribe-model request",
+    )
+
+    candidate = response.candidates[0] if response.candidates else None
+    parts = candidate.content.parts if candidate and candidate.content else None
+    if candidate and candidate.finish_reason not in (None, types.FinishReason.STOP):
+        raise RuntimeError(f"transcribe model stopped early: {candidate.finish_reason}")
+
+    paragraphs: list[list] = []  # [start_seconds, speaker, [texts]]
+    for part in parts or []:
+        segment = part.audio_transcription
+        if not segment or not (segment.text or "").strip():
+            continue
+        speaker = _speaker_name(segment.speaker_label)
+        if paragraphs and paragraphs[-1][1] == speaker:
+            paragraphs[-1][2].append(segment.text.strip())
+            continue
+        start = _parse_offset(segment.words[0].start_offset) if segment.words else 0.0
+        paragraphs.append([start, speaker, [segment.text.strip()]])
+
+    if not paragraphs:
+        raise RuntimeError("transcribe model returned no transcription")
+    return [
+        f"{_format_timestamp(start)} {speaker}: {' '.join(texts)}\n\n"
+        for start, speaker, texts in paragraphs
+    ]
+
+
 def transcribe(
     client: genai.Client,
     file: types.File,
     system_prompt: str,
+    on_model_selected: Optional[Callable[[str], None]] = None,
 ) -> Iterator[str]:
-    """Generate transcript using Gemini with streaming.
+    """Generate transcript, preferring the dedicated ASR model.
+
+    Uses gemini-3.5-transcribe when the audio fits its input cap, and falls
+    back to prompt-driven gemini-2.5-flash when the audio is too long or the
+    transcribe model fails for any API reason (capacity, quota, rejection).
+    The transcribe model returns its result in one piece, so a fallback
+    never mixes output from two models.
 
     Args:
         client: Gemini client instance
         file: Active Gemini File object
-        system_prompt: Formatted prompt from prompts.py
+        system_prompt: Formatted prompt from prompts.py (used by the fallback
+            model only -- the transcribe model ignores prompts)
+        on_model_selected: Optional callback told which model is producing
+            the transcript, before the first chunk is yielded
 
     Yields:
         Text chunks as they stream in
     """
-    logger.info("Starting transcription with model=%s file=%s", "gemini-3.5-flash", file.name)
+    try:
+        seconds = _estimate_audio_seconds(client, file)
+    except Exception as exc:
+        logger.warning("Could not estimate audio length (%s); using %s", exc, FALLBACK_MODEL)
+        seconds = None
+
+    if seconds is None:
+        pass
+    elif seconds > TRANSCRIBE_MAX_SECONDS:
+        logger.info(
+            "Audio ~%.0f min exceeds %s cap; using %s",
+            seconds / 60, TRANSCRIBE_MODEL, FALLBACK_MODEL,
+        )
+    else:
+        logger.info("Starting transcription with model=%s file=%s", TRANSCRIBE_MODEL, file.name)
+        try:
+            paragraphs = _transcribe_with_asr_model(client, file)
+        except Exception as exc:
+            logger.warning("%s failed (%s); falling back to %s", TRANSCRIBE_MODEL, exc, FALLBACK_MODEL)
+        else:
+            if on_model_selected:
+                on_model_selected(TRANSCRIBE_MODEL)
+            yield from paragraphs
+            return
+
+    if on_model_selected:
+        on_model_selected(FALLBACK_MODEL)
+    logger.info("Starting transcription with model=%s file=%s", FALLBACK_MODEL, file.name)
     response = client.models.generate_content_stream(
-        model="gemini-3.5-flash",
+        model=FALLBACK_MODEL,
         contents=[system_prompt, file],
         config=types.GenerateContentConfig(
             temperature=0.1,
